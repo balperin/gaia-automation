@@ -14,7 +14,7 @@ const DEFAULTS = {
   songEnabled: true,
   songActor: "Gentlehorn Dawnbringer",
   songArea: true,
-  songIncludesSelf: false,
+  songIncludesSelf: true,
 };
 const SPEAR_OPTION = "vengeful-spear";
 const FEELING_OPTION = "good-feeling";
@@ -51,7 +51,7 @@ Hooks.once("init", () => {
   reg("songEnabled", { name: "Song of the West: run when the action card is posted", hint: "Rolls the check on the owner's client, applies the aura effect and posts a tier card.", type: Boolean });
   reg("songActor", { name: "Song of the West: actor name", type: String });
   reg("songArea", { name: "Song of the West: apply the one-time effects to tokens in the glow", hint: "GM client only: heal allies, lower dying and wounded, dazzle enemies, speed, condition relief, quickened.", type: Boolean });
-  reg("songIncludesSelf", { name: "Song of the West: the singer counts as an ally", type: Boolean });
+  reg("songIncludesSelf", { name: "Song of the West: the singer is affected too", hint: "On by default: the singer heals, sheds conditions and is quickened along with the allies in the glow.", type: Boolean });
 });
 
 export async function setup() {

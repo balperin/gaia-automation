@@ -19,7 +19,7 @@ A small Foundry VTT module (core v13 or v14, PF2e system 7.x or 8.x) for the Gai
   then applies the one-time effects to every actor with a visible token inside the glow (radius 5 x stacks + 5 ft, the same formula
   as the aura effects): dying and wounded -1 (5+), heal allies and dazzle enemies for 1 round (10+), Speed bonus for 10 rounds (15+),
   lower each ally's highest of frightened, stupefied, enfeebled, clumsy or fatigued by the stack count (20+), quickened for one round
-  per stack (25+). A whispered summary lists what was done. Healing reading: 2 per stack, +2 per full 5 above 25.
+  per stack (25+). The singer is affected too (setting, on by default). A whispered summary lists what was done. Healing reading: 2 per stack, +2 per full 5 above 25.
   `api.songOfTheWest()` runs it by hand and spends the daily use; `api.songAreaPlan(total)` previews the area effects without changing anything.
 
 Only one client acts on any event: the active GM if one is connected, otherwise the first active owner of the actor.
