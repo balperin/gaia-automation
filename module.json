@@ -1,12 +1,31 @@
 {
   "id": "gaia-automation",
   "title": "Gaia Automation",
-  "description": "Small automations for the Gaia campaign (PF2e): Vengeful Spear toggling for kindred pairs and Dorin's Vampiric Thirst reaction. Each feature has a world setting to switch it off.",
-  "version": "0.1.0",
-  "authors": [{ "name": "Bryen Alperin" }],
-  "compatibility": { "minimum": "13", "verified": "13.351" },
-  "relationships": { "systems": [{ "id": "pf2e", "type": "system", "compatibility": { "minimum": "7.0.0" } }] },
-  "esmodules": ["scripts/main.js"],
+  "description": "Small automations for the Gaia campaign (PF2e): Vengeful Spear toggling for kindred pairs, Dorin's Vampiric Thirst reaction and Gentlehorn's Song of the West. Each feature has a world setting to switch it off.",
+  "version": "0.2.0",
+  "authors": [
+    {
+      "name": "Bryen Alperin"
+    }
+  ],
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13.351"
+  },
+  "relationships": {
+    "systems": [
+      {
+        "id": "pf2e",
+        "type": "system",
+        "compatibility": {
+          "minimum": "7.0.0"
+        }
+      }
+    ]
+  },
+  "esmodules": [
+    "scripts/main.js"
+  ],
   "url": "https://github.com/balperin/gaia-automation",
   "manifest": "https://github.com/balperin/gaia-automation/releases/latest/download/module.json",
   "download": "https://github.com/balperin/gaia-automation/releases/latest/download/gaia-automation.zip"

@@ -12,6 +12,11 @@ A small Foundry VTT module (core v13, PF2e system 7.x) for the Gaia campaign.
   flavor line on the card and as a speech bubble, drawn without repeats from `data/vampiric-thirst-lines.json`.
   `game.modules.get("gaia-automation").api.holdThirst()` keeps the reaction for one round.
 
+- **Song of the West**: when the configured actor posts the Song of the West action card, the owner's client rolls Acrobatics to
+  Perform (or Performance if higher), applies the matching `Song of the West (Aura N)` effect and posts a card listing each tier
+  reached with the numbers filled in and a clickable healing roll. Dazzled, condition removal, speed and quickened stay manual.
+  `api.songOfTheWest()` runs it by hand and spends the daily use.
+
 Only one client acts on any event: the active GM if one is connected, otherwise the first active owner of the actor.
 
 ## Install
