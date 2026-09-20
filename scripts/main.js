@@ -1,8 +1,23 @@
-// Gaia Automation - Foundry v13, pf2e 7.x.
-// Every client loads this file, but only ONE client acts on any event: the active GM if there is one,
-// otherwise the first active owner of the actor. That keeps effects from firing twice.
+// Gaia Automation - Foundry v13/v14, pf2e 7.x/8.x.
+// Every client loads this file, but only ONE client acts on any event, so nothing fires twice:
+//   gmActs(actor)    - the active GM, or else the first active owner (things that touch other people's tokens)
+//   ownerActs(actor) - the first active non-GM owner, or else the active GM (things the player should roll)
 const MOD = "gaia-automation";
+const DEFAULTS = {
+  spearEnabled: true,
+  spearPairs: "Dorin, Scion of the Magi|Gentlehorn Dawnbringer",
+  thirstEnabled: true,
+  thirstActor: "Dorin, Scion of the Magi",
+  thirstFlavor: true,
+  feelingEnabled: true,
+  feelingActor: "Gideon, Arcanum Tempest",
+  songEnabled: true,
+  songActor: "Gentlehorn Dawnbringer",
+  songArea: true,
+  songIncludesSelf: false,
+};
 const SPEAR_OPTION = "vengeful-spear";
+const FEELING_OPTION = "good-feeling";
 const THIRST_TYPES = new Set(["slashing", "piercing", "bleed"]);
 const THIRST_EFFECT = "Blood for the Elder Vampire";
 const THIRST_EFFECT_UUID = "Compendium.world.item-effects.Item.kgdofGYap0R5DEjM";
@@ -14,56 +29,83 @@ const SONG_AURAS = [
   "Compendium.world.item-effects.Item.E4BA77eAGRopGbml",
   "Compendium.world.item-effects.Item.Y7jk1vVnmNvECIdQ",
 ];
-const state = { spearPending: {}, thirstUsedKey: null, thirstLastFire: 0, thirstHeld: false, lines: [] };
+const CONDITION = (slug) => "Compendium.pf2e.conditionitems.Item." + {
+  dazzled: "TkIyaNPgTZFBCCuh", quickened: "nlCjDvLMf2EkV2dl",
+}[slug];
+const SONG_ICON = "icons/magic/light/explosion-star-glow-silhouette.webp";
+const state = { spearPending: {}, thirstUsedKey: null, thirstLastFire: 0, thirstHeld: false, lines: [], feelingTimer: null, hooked: false };
+
+function cfg(key) {
+  try { return game.settings.get(MOD, key); } catch (e) { return DEFAULTS[key]; }
+}
 
 Hooks.once("init", () => {
-  const reg = (key, data) => game.settings.register(MOD, key, { scope: "world", config: true, ...data });
-  reg("spearEnabled", { name: "Vengeful Spear: automate the toggle", hint: "Turns a PC's Vengeful Spear on when their kindred takes damage and off after their critical Strike (once that Strike's damage is rolled).", type: Boolean, default: true });
-  reg("spearPairs", { name: "Vengeful Spear: kindred pairs", hint: "Actor names, A|B, separate pairs with a semicolon.", type: String, default: "Dorin, Scion of the Magi|Gentlehorn Dawnbringer" });
-  reg("thirstEnabled", { name: "Vampiric Thirst: automate the reaction", hint: "When an enemy takes slashing, piercing or bleed damage, the actor below heals through the normal healing pipeline and gains a Blood for the Elder Vampire stack. Once per round.", type: Boolean, default: true });
-  reg("thirstActor", { name: "Vampiric Thirst: actor name", type: String, default: "Dorin, Scion of the Magi" });
-  reg("songEnabled", { name: "Song of the West: run when the action card is posted", hint: "When the actor below sends the Song of the West action to chat, roll the check, apply the aura effect and post a tier card with a healing roll. Dazzled, condition removal, speed and quickened stay manual.", type: Boolean, default: true });
-  reg("songActor", { name: "Song of the West: actor name", type: String, default: "Gentlehorn Dawnbringer" });
-  reg("thirstFlavor", { name: "Vampiric Thirst: flavor lines and speech bubble", type: Boolean, default: true });
+  const reg = (key, data) => game.settings.register(MOD, key, { scope: "world", config: true, default: DEFAULTS[key], ...data });
+  reg("spearEnabled", { name: "Vengeful Spear: automate the toggle", hint: "On when a PC's kindred takes damage; off after that PC's critical Strike (once its damage is rolled).", type: Boolean });
+  reg("spearPairs", { name: "Vengeful Spear: kindred pairs", hint: "Actor names, A|B, separate pairs with a semicolon.", type: String });
+  reg("thirstEnabled", { name: "Vampiric Thirst: automate the reaction", hint: "When an enemy takes slashing, piercing or bleed damage, the actor below heals through the normal healing pipeline and gains a Blood for the Elder Vampire stack. Once per round.", type: Boolean });
+  reg("thirstActor", { name: "Vampiric Thirst: actor name", type: String });
+  reg("thirstFlavor", { name: "Vampiric Thirst: flavor lines and speech bubble", type: Boolean });
+  reg("feelingEnabled", { name: "I've Got a Good Feeling About This: automate the toggle", hint: "On when the actor below casts a spell; off at the end of their turn.", type: Boolean });
+  reg("feelingActor", { name: "Good Feeling: actor name", type: String });
+  reg("songEnabled", { name: "Song of the West: run when the action card is posted", hint: "Rolls the check on the owner's client, applies the aura effect and posts a tier card.", type: Boolean });
+  reg("songActor", { name: "Song of the West: actor name", type: String });
+  reg("songArea", { name: "Song of the West: apply the one-time effects to tokens in the glow", hint: "GM client only: heal allies, lower dying and wounded, dazzle enemies, speed, condition relief, quickened.", type: Boolean });
+  reg("songIncludesSelf", { name: "Song of the West: the singer counts as an ally", type: Boolean });
 });
 
-Hooks.once("ready", async () => {
+export async function setup() {
+  if (state.hooked) return;
+  state.hooked = true;
   try {
-    const res = await fetch("modules/" + MOD + "/data/vampiric-thirst-lines.json");
-    state.lines = await res.json();
+    const base = game.modules.get(MOD)?.active ? "modules/" + MOD + "/" : (globalThis.GAIA_AUTOMATION_BASE ?? "");
+    state.lines = await (await fetch(base + "data/vampiric-thirst-lines.json")).json();
   } catch (e) {
     console.warn(MOD, "could not load flavor lines", e);
   }
-  game.modules.get(MOD).api = {
-    // a player or GM can call this (macro or console) to keep the Vampiric Thirst reaction for something else this round
-    // run the Song by hand (checks and spends the daily use): game.modules.get("gaia-automation").api.songOfTheWest()
+  const api = {
     songOfTheWest: () => songOfTheWest({ fromCard: false }),
+    songAreaPlan: (total) => songArea({ total, dryRun: true }),
     holdThirst: () => { state.thirstHeld = true; ui.notifications.info("Vampiric Thirst: reaction held this round."); },
+    state,
   };
-  Hooks.on("createChatMessage", (msg) => {
-    onMessage(msg).catch((err) => console.error(MOD, err));
-  });
-});
+  const mod = game.modules.get(MOD);
+  if (mod) mod.api = api;
+  globalThis.gaiaAutomation = api;
+  Hooks.on("createChatMessage", (msg) => { onMessage(msg).catch((err) => console.error(MOD, err)); });
+  Hooks.on("combatTurnChange", (combat, prior) => { onTurnChange(combat, prior).catch((err) => console.error(MOD, err)); });
+  console.log(MOD, "ready");
+}
+Hooks.once("ready", setup);
 
-/** Only one client acts: the active GM, or else the first active non-GM owner of the actor. */
-function iAct(actor) {
+/* ---------------- who acts ---------------- */
+function firstOwner(actor) {
+  return game.users.find((u) => u.active && !u.isGM && actor.testUserPermission(u, "OWNER")) ?? null;
+}
+function gmActs(actor) {
   if (!actor) return false;
   const gm = game.users.activeGM;
-  if (gm) return gm.isSelf;
-  const owner = game.users.find((u) => u.active && !u.isGM && actor.testUserPermission(u, "OWNER"));
-  return !!owner?.isSelf;
+  return gm ? gm.isSelf : !!firstOwner(actor)?.isSelf;
 }
-
-/** For things the PLAYER should roll: the first active non-GM owner acts, else the active GM. */
 function ownerActs(actor) {
   if (!actor) return false;
-  const owner = game.users.find((u) => u.active && !u.isGM && actor.testUserPermission(u, "OWNER"));
-  if (owner) return owner.isSelf;
-  return !!game.users.activeGM?.isSelf;
+  const owner = firstOwner(actor);
+  return owner ? owner.isSelf : !!game.users.activeGM?.isSelf;
 }
 
+/* ---------------- roll-option toggles ---------------- */
+const findToggle = (actor, option) =>
+  Object.values(actor.synthetics?.toggles ?? {}).flatMap((d) => Object.values(d)).find((t) => t.option === option) ?? null;
+async function setToggle(actor, option, value) {
+  const t = findToggle(actor, option);
+  if (!t || !!t.checked === value) return false;
+  await actor.toggleRollOption(t.domain, option, t.itemId ?? null, value);
+  return true;
+}
+
+/* ---------------- Vengeful Spear ---------------- */
 function pairs() {
-  return String(game.settings.get(MOD, "spearPairs") || "").split(";").map((p) => p.split("|").map((s) => s.trim())).filter((p) => p.length === 2 && p[0] && p[1]);
+  return String(cfg("spearPairs") || "").split(";").map((p) => p.split("|").map((s) => s.trim())).filter((p) => p.length === 2 && p[0] && p[1]);
 }
 function kindredOf(actor) {
   for (const [a, b] of pairs()) {
@@ -72,19 +114,13 @@ function kindredOf(actor) {
   }
   return null;
 }
-const findToggle = (actor) =>
-  Object.values(actor.synthetics?.toggles ?? {}).flatMap((d) => Object.values(d)).find((t) => t.option === SPEAR_OPTION) ?? null;
-
 async function setSpear(actor, value, why) {
-  const t = findToggle(actor);
-  if (!t || !!t.checked === value) return;
-  await actor.toggleRollOption(t.domain, SPEAR_OPTION, t.itemId ?? null, value);
+  if (!(await setToggle(actor, SPEAR_OPTION, value))) return;
   await ChatMessage.create({
     speaker: ChatMessage.getSpeaker({ actor }),
     content: "<strong>Vengeful Spear</strong> " + (value ? "awakens" : "fades") + ": " + why,
   });
 }
-
 async function settleSpear(actor) {
   const p = state.spearPending[actor.id];
   if (!p) return;
@@ -92,44 +128,64 @@ async function settleSpear(actor) {
   if (!p.reapply) await setSpear(actor, false, "critical hit scored.");
 }
 
+/* ---------------- message router ---------------- */
 async function onMessage(msg) {
   const pf = msg.flags?.pf2e ?? {};
+  const mine = msg.flags?.[MOD] ?? {};
 
-  // Song of the West: the action card itself (no roll context) posted by the configured actor
-  if (!pf.context && !pf.appliedDamage && game.settings.get(MOD, "songEnabled")) {
+  // Song of the West, step 2: the GM client applies the area effects described by the owner's card
+  if (mine.song && cfg("songArea")) {
+    const singer = await fromUuid(mine.song.actorUuid).catch(() => null);
+    if (singer && gmActs(singer) && game.user.isGM) await songArea({ total: mine.song.total, dryRun: false });
+    return;
+  }
+
+  // Song of the West, step 1: the action card itself, posted by the singer
+  if (!pf.context && !pf.appliedDamage && cfg("songEnabled")) {
     const it = msg.item;
-    if (it?.type === "action" && it.name === SONG_ACTION && it.actor?.name === game.settings.get(MOD, "songActor") && ownerActs(it.actor)) {
+    if (it?.type === "action" && it.name === SONG_ACTION && it.actor?.name === cfg("songActor") && ownerActs(it.actor)) {
       await songOfTheWest({ fromCard: true });
       return;
     }
   }
-  const ad = pf.appliedDamage;
 
+  // Good Feeling: a spell cast card from the configured actor
+  if (cfg("feelingEnabled") && pf.origin?.type === "spell" && !pf.context && !pf.appliedDamage) {
+    const caster = msg.actor ?? game.actors.get(msg.speaker?.actor);
+    if (caster?.name === cfg("feelingActor") && gmActs(caster)) {
+      await setToggle(caster, FEELING_OPTION, true);
+      if (!game.combat?.started) {
+        clearTimeout(state.feelingTimer);
+        state.feelingTimer = setTimeout(() => setToggle(caster, FEELING_OPTION, false), 12000); // no turns outside combat
+      }
+    }
+  }
+
+  const ad = pf.appliedDamage;
   if (ad && !ad.isHealing && ad.updates?.length > 0) {
     const hurt = await fromUuid(ad.uuid).catch(() => null);
     if (!hurt) return;
-    if (game.settings.get(MOD, "spearEnabled")) {
+    if (cfg("spearEnabled")) {
       const partner = kindredOf(hurt);
-      if (partner && iAct(partner)) {
+      if (partner && gmActs(partner)) {
         if (state.spearPending[partner.id]) state.spearPending[partner.id].reapply = true;
         else await setSpear(partner, true, hurt.name + " was hurt.");
       }
     }
-    if (game.settings.get(MOD, "thirstEnabled") && hurt.alliance === "opposition") await vampiricThirst(msg, hurt);
+    if (cfg("thirstEnabled") && hurt.alliance === "opposition") await vampiricThirst(msg, hurt);
     return;
   }
 
-  if (!game.settings.get(MOD, "spearEnabled")) return;
+  if (!cfg("spearEnabled")) return;
   const ctx = pf.context;
   const actor = msg.actor ?? game.actors.get(msg.speaker?.actor);
-  if (!ctx || !actor || !kindredOf(actor) || !iAct(actor)) return;
-
+  if (!ctx || !actor || !kindredOf(actor) || !gmActs(actor)) return;
   if (ctx.type === "attack-roll") {
     await settleSpear(actor); // a crit whose damage was never rolled
     if (ctx.outcome === "criticalSuccess") {
       const isStrike = (ctx.domains ?? []).includes("strike-attack-roll") ||
         (ctx.options ?? []).some((o) => o === "item:type:weapon" || o === "item:type:melee" || o.startsWith("item:base:"));
-      if (isStrike && findToggle(actor)?.checked) {
+      if (isStrike && findToggle(actor, SPEAR_OPTION)?.checked) {
         state.spearPending[actor.id] = { at: Date.now(), reapply: false };
         setTimeout(() => {
           const p = state.spearPending[actor.id];
@@ -142,6 +198,13 @@ async function onMessage(msg) {
   }
 }
 
+async function onTurnChange(combat, prior) {
+  if (!cfg("feelingEnabled")) return;
+  const ended = combat?.combatants?.get(prior?.combatantId)?.actor;
+  if (ended?.name === cfg("feelingActor") && gmActs(ended)) await setToggle(ended, FEELING_OPTION, false);
+}
+
+/* ---------------- Vampiric Thirst ---------------- */
 function roundKey(actor) {
   const c = game.combat;
   if (!c?.started) return null;
@@ -151,11 +214,10 @@ function roundKey(actor) {
 }
 
 async function vampiricThirst(msg, victim) {
-  const actor = game.actors.getName(game.settings.get(MOD, "thirstActor"));
-  if (!actor || !iAct(actor)) return;
+  const actor = game.actors.getName(cfg("thirstActor"));
+  if (!actor || !gmActs(actor)) return;
   if (actor.system.attributes.hp.value <= 0 || actor.hasCondition?.("unconscious")) return;
 
-  // find the damage roll behind this applied-damage card
   const all = game.messages.contents;
   const i = all.findIndex((m) => m.id === msg.id);
   const start = i >= 0 ? i - 1 : all.length - 1;
@@ -172,7 +234,6 @@ async function vampiricThirst(msg, victim) {
   }
   if (!types || !types.some((t) => THIRST_TYPES.has(t))) return;
 
-  // reaction gate: once per round (resets on the actor's turn), or once per 6 seconds outside combat
   const key = roundKey(actor);
   if (key) {
     if (state.thirstUsedKey === key) return;
@@ -192,17 +253,16 @@ async function vampiricThirst(msg, victim) {
   }
 
   let line = "";
-  if (game.settings.get(MOD, "thirstFlavor") && state.lines.length) {
-    let bag = actor.getFlag(MOD, "lineBag");
+  if (cfg("thirstFlavor") && state.lines.length) {
+    let bag = actor.getFlag("world", "vtBag");
     if (!Array.isArray(bag) || !bag.length || bag.some((n) => n >= state.lines.length)) {
       bag = [...state.lines.keys()];
       for (let k = bag.length - 1; k > 0; k--) { const r = Math.floor(Math.random() * (k + 1)); [bag[k], bag[r]] = [bag[r], bag[k]]; }
     }
     line = state.lines[bag.pop()];
-    await actor.setFlag(MOD, "lineBag", bag);
+    await actor.setFlag("world", "vtBag", bag);
   }
 
-  // heal through the pf2e pipeline (same domains as the item's inline @Damage[1[healing]] link)
   const item = actor.items.find((it) => it.type === "action" && it.name === "Vampiric Thirst") ?? null;
   const domains = ["healing", "inline-healing", (item?.id ?? "x") + "-inline-healing", "vampiric-thirst-inline-healing"];
   const opts = new Set([...actor.getRollOptions(domains), ...(item?.getRollOptions("item") ?? [])]);
@@ -234,10 +294,16 @@ async function vampiricThirst(msg, victim) {
   await actor.applyDamage({ damage: -roll.total, token: tokObj?.document ?? null, item, rollOptions: opts, skipIWR: true });
 }
 
-async function songOfTheWest({ fromCard }) {
-  const COND = (id, label) => "@UUID[Compendium.pf2e.conditionitems.Item." + id + "]{" + label + "}";
+/* ---------------- Song of the West ---------------- */
+function songNumbers(total) {
+  const rawStacks = Math.floor(total / 5);
+  const stacks = Math.min(5, rawStacks);
+  const extraHeal = 2 * Math.max(0, Math.floor((total - 25) / 5)); // "30+: each additional 5 adds 2 healing"
+  return { rawStacks, stacks, extraHeal, heal: total >= 10 ? 2 * stacks + extraHeal : 0, radius: stacks >= 1 ? 5 * stacks + 5 : 0, speed: 5 * Math.floor(stacks / 2) };
+}
 
-  const actor = game.actors.getName(game.settings.get(MOD, "songActor"));
+async function songOfTheWest({ fromCard }) {
+  const actor = game.actors.getName(cfg("songActor"));
   if (!actor) return;
   const item = actor.items.find((i) => i.type === "action" && i.name === SONG_ACTION);
   const uses = item?.system.frequency?.value ?? 1;
@@ -245,44 +311,108 @@ async function songOfTheWest({ fromCard }) {
 
   const acro = actor.skills.acrobatics;
   const perf = actor.skills.performance;
-  const perfTrained = (perf?.rank ?? 0) >= 1;
-  const acroEff = (acro?.mod ?? 0) + (perfTrained ? 1 : 0); // Acrobatic Performer +1 when trained in both
+  const acroEff = (acro?.mod ?? 0) + ((perf?.rank ?? 0) >= 1 ? 1 : 0); // Acrobatic Performer +1 when trained in both
   const stat = acroEff >= (perf?.mod ?? -99) ? acro : perf;
   const roll = await stat.roll({ extraRollOptions: ["action:perform", "action:perform:dance"], title: SONG_ACTION + " (" + stat.label + ")" });
   if (!roll) return;
-
-  const total = roll.total;
-  const rawStacks = Math.floor(total / 5);
-  const stacks = Math.min(5, rawStacks);
-  const extraHeal = 2 * Math.max(0, Math.floor((total - 25) / 5)); // "30+: each additional 5 adds 2 healing" (GM: confirm this reading)
-  const heal = total >= 10 ? 2 * stacks + extraHeal : 0;
-  const radius = 5 * Math.max(1, stacks + 1);
-
   if (!fromCard && item?.system.frequency) await item.update({ "system.frequency.value": Math.max(0, uses - 1) });
 
-  // swap the aura effect
-  const old = actor.itemTypes.effect.filter((e) => e.name.startsWith("Song of the West")).map((e) => e.id);
+  const total = roll.total;
+  const n = songNumbers(total);
+  const old = actor.itemTypes.effect.filter((e) => e.name.startsWith("Song of the West (Aura")).map((e) => e.id);
   if (old.length) await actor.deleteEmbeddedDocuments("Item", old);
   let auraName = "none (result under 5)";
-  if (stacks >= 1) {
-    const src = await fromUuid(SONG_AURAS[stacks - 1]).catch(() => null);
-    if (src) {
-      await actor.createEmbeddedDocuments("Item", [src.toObject()]);
-      auraName = src.name;
-    } else auraName = "could not load Aura " + stacks;
+  if (n.stacks >= 1) {
+    const src = await fromUuid(SONG_AURAS[n.stacks - 1]).catch(() => null);
+    if (src) { await actor.createEmbeddedDocuments("Item", [src.toObject()]); auraName = src.name; }
+    else auraName = "could not load Aura " + n.stacks;
   }
 
-  const li = [];
-  li.push("<li>Glow of light. Aura effect applied: <strong>" + auraName + "</strong> (about " + radius + " ft if each tier adds 5 ft).</li>");
-  if (total >= 5) li.push("<li><strong>5+</strong>: allies in the glow get +2 status to saves and checks against death effects; reduce every dying ally's dying value by 1 and every ally's wounded value by 1.</li>");
-  if (total >= 10) li.push("<li><strong>10+</strong>: enemies in the glow are " + COND("TkIyaNPgTZFBCCuh", "Dazzled") + " for 1 round. Allies heal @Damage[" + heal + "[vitality,healing]] now (2 x " + stacks + " stacks" + (extraHeal ? " + " + extraHeal + " for 30+" : "") + ").</li>");
-  if (total >= 15) li.push("<li><strong>15+</strong>: allies in the glow gain +" + 5 * Math.floor(stacks / 2) + " ft Speed.</li>");
-  if (total >= 20) li.push("<li><strong>20+</strong>: each ally reduces one of " + COND("i3OJZU2nk64Df3xm", "Clumsy") + ", " + COND("MIRkyAjyBeXivMa7", "Enfeebled") + ", " + COND("HL2l2VRSaQHu9lUw", "Fatigued") + ", " + COND("TBSHQspnbcqxsmjL", "Frightened") + " or " + COND("e1XGnhKNSQIm5IXg", "Stupefied") + " by " + stacks + ".</li>");
-  if (total >= 25) li.push("<li><strong>25+</strong>: allies in the glow are " + COND("nlCjDvLMf2EkV2dl", "Quickened") + " 1 for " + stacks + " rounds (extra action: Strike or an action with the move trait).</li>");
-
+  const auto = cfg("songArea") && game.users.activeGM ? " <em>(applied automatically)</em>" : "";
+  const li = ["<li>Glow of light, " + (n.radius || 5) + " ft. Aura effect on the singer: <strong>" + auraName + "</strong>.</li>"];
+  if (total >= 5) li.push("<li><strong>5+</strong>: allies in the glow get +2 status to saves and checks against death effects (aura). Dying and wounded each drop by 1." + auto + "</li>");
+  if (total >= 10) li.push("<li><strong>10+</strong>: enemies in the glow are dazzled for 1 round; allies heal @Damage[" + n.heal + "[vitality,healing]] (2 x " + n.stacks + (n.extraHeal ? " + " + n.extraHeal + " for 30+" : "") + ")." + auto + "</li>");
+  if (total >= 15) li.push("<li><strong>15+</strong>: allies in the glow gain +" + n.speed + " ft Speed." + auto + "</li>");
+  if (total >= 20) li.push("<li><strong>20+</strong>: each ally lowers one of clumsy, enfeebled, fatigued, frightened or stupefied by " + n.stacks + " (the highest one is chosen)." + auto + "</li>");
+  if (total >= 25) li.push("<li><strong>25+</strong>: allies in the glow are quickened 1 for " + n.stacks + " rounds (extra action: Strike or a move action)." + auto + "</li>");
   await ChatMessage.create({
     speaker: ChatMessage.getSpeaker({ actor }),
-    content: "<h3>Song of the West</h3><p>Result <strong>" + total + "</strong> = <strong>" + rawStacks + "</strong> stacks" +
-      (rawStacks > 5 ? " (tiers cap at 5)" : "") + ". Lasts 10 rounds.</p><ul>" + li.join("") + "</ul>",
+    content: "<h3>Song of the West</h3><p>Result <strong>" + total + "</strong> = <strong>" + n.rawStacks + "</strong> stacks" +
+      (n.rawStacks > 5 ? " (tiers cap at 5)" : "") + ". Lasts 10 rounds.</p><ul>" + li.join("") + "</ul>",
+    flags: { [MOD]: { song: { total, actorUuid: actor.uuid } } },
   });
 }
+
+function songEffect(name, rounds, rules) {
+  return {
+    type: "effect", name, img: SONG_ICON,
+    system: { level: { value: 7 }, duration: { value: rounds, unit: "rounds", expiry: "turn-start", sustained: false }, tokenIcon: { show: true }, rules, slug: null },
+  };
+}
+
+/** The one-time effects on tokens inside the glow. dryRun returns the plan without changing anything. */
+async function songArea({ total, dryRun }) {
+  const singer = game.actors.getName(cfg("songActor"));
+  const sTok = singer?.getActiveTokens()[0];
+  const n = songNumbers(total);
+  const plan = { total, ...n, allies: [], enemies: [], notes: [] };
+  if (!sTok || n.stacks < 1) { plan.notes.push("no token on this scene, or result under 5"); return plan; }
+  // one entry per actor: linked tokens that share an actor (mirror images, duplicates) must not be affected twice
+  const seenActors = new Set();
+  const inGlow = canvas.tokens.placeables.filter((t) => {
+    if (!t.actor || t.document.hidden || !(t === sTok || sTok.distanceTo(t) <= n.radius)) return false;
+    if (seenActors.has(t.actor.uuid)) return false;
+    seenActors.add(t.actor.uuid);
+    return true;
+  });
+  const allies = inGlow.filter((t) => t.actor.alliance === singer.alliance && (cfg("songIncludesSelf") || t !== sTok));
+  const enemies = inGlow.filter((t) => t.actor.alliance && t.actor.alliance !== singer.alliance);
+
+  for (const t of allies) {
+    const a = t.actor;
+    const did = [];
+    if (total >= 5) {
+      for (const slug of ["dying", "wounded"]) {
+        if (a.hasCondition(slug)) { did.push(slug + " -1"); if (!dryRun) await a.decreaseCondition(slug); }
+      }
+    }
+    if (total >= 10 && n.heal > 0) {
+      const hp = a.system.attributes.hp;
+      if (hp && hp.value < hp.max) { did.push("heal " + n.heal); if (!dryRun) await a.applyDamage({ damage: -n.heal, token: t.document, skipIWR: true }); }
+    }
+    if (total >= 15 && n.speed > 0) {
+      did.push("+" + n.speed + " ft Speed");
+      if (!dryRun) await a.createEmbeddedDocuments("Item", [songEffect("Song of the West: Swift", 10, [{ key: "FlatModifier", selector: "land-speed", type: "status", value: n.speed }])]);
+    }
+    if (total >= 20) {
+      const best = ["frightened", "stupefied", "enfeebled", "clumsy", "fatigued"].map((s) => ({ s, c: a.getCondition?.(s) })).filter((x) => x.c)
+        .sort((x, y) => (y.c.value ?? 1) - (x.c.value ?? 1))[0];
+      if (best) {
+        did.push(best.s + " -" + Math.min(n.stacks, best.c.value ?? 1));
+        if (!dryRun) { for (let k = 0; k < n.stacks && a.hasCondition(best.s); k++) await a.decreaseCondition(best.s); }
+      }
+    }
+    if (total >= 25) {
+      did.push("quickened " + n.stacks + " rounds");
+      if (!dryRun) await a.createEmbeddedDocuments("Item", [songEffect("Song of the West: Quickened", n.stacks, [{ key: "GrantItem", uuid: CONDITION("quickened"), inMemoryOnly: true, onDeleteActions: { grantee: "restrict" } }])]);
+    }
+    plan.allies.push(t.name + ": " + (did.join(", ") || "nothing needed"));
+  }
+  if (total >= 10) {
+    for (const t of enemies) {
+      plan.enemies.push(t.name + ": dazzled 1 round");
+      if (!dryRun) await t.actor.createEmbeddedDocuments("Item", [songEffect("Song of the West: Dazzled", 1, [{ key: "GrantItem", uuid: CONDITION("dazzled"), inMemoryOnly: true, onDeleteActions: { grantee: "restrict" } }])]);
+    }
+  }
+  if (!dryRun) {
+    await ChatMessage.create({
+      speaker: ChatMessage.getSpeaker({ actor: singer }),
+      content: "<strong>Song of the West</strong> applied within " + n.radius + " ft.<br><em>Allies:</em> " + (plan.allies.join("; ") || "none in the glow") +
+        (total >= 10 ? "<br><em>Enemies:</em> " + (plan.enemies.join("; ") || "none in the glow") : ""),
+      whisper: ChatMessage.getWhisperRecipients("GM").map((u) => u.id),
+    });
+  }
+  return plan;
+}
+
+if (globalThis.game?.ready) setup();

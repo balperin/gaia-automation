@@ -1,6 +1,6 @@
 # Gaia Automation
 
-A small Foundry VTT module (core v13, PF2e system 7.x) for the Gaia campaign.
+A small Foundry VTT module (core v13 or v14, PF2e system 7.x or 8.x) for the Gaia campaign.
 
 ## Features (each has a world setting under Configure Settings > Gaia Automation)
 - **Vengeful Spear**: for each kindred pair, turns the `vengeful-spear` roll option on when the kindred takes applied damage and off
@@ -12,10 +12,15 @@ A small Foundry VTT module (core v13, PF2e system 7.x) for the Gaia campaign.
   flavor line on the card and as a speech bubble, drawn without repeats from `data/vampiric-thirst-lines.json`.
   `game.modules.get("gaia-automation").api.holdThirst()` keeps the reaction for one round.
 
+- **I've Got a Good Feeling About This** (Vanessa's Kiss): turns the `good-feeling` roll option on when the configured actor posts a
+  spell cast card and off when their turn ends (12 seconds later outside combat).
 - **Song of the West**: when the configured actor posts the Song of the West action card, the owner's client rolls Acrobatics to
-  Perform (or Performance if higher), applies the matching `Song of the West (Aura N)` effect and posts a card listing each tier
-  reached with the numbers filled in and a clickable healing roll. Dazzled, condition removal, speed and quickened stay manual.
-  `api.songOfTheWest()` runs it by hand and spends the daily use.
+  Perform (or Performance if higher), applies the matching `Song of the West (Aura N)` effect and posts a tier card. The GM's client
+  then applies the one-time effects to every actor with a visible token inside the glow (radius 5 x stacks + 5 ft, the same formula
+  as the aura effects): dying and wounded -1 (5+), heal allies and dazzle enemies for 1 round (10+), Speed bonus for 10 rounds (15+),
+  lower each ally's highest of frightened, stupefied, enfeebled, clumsy or fatigued by the stack count (20+), quickened for one round
+  per stack (25+). A whispered summary lists what was done. Healing reading: 2 per stack, +2 per full 5 above 25.
+  `api.songOfTheWest()` runs it by hand and spends the daily use; `api.songAreaPlan(total)` previews the area effects without changing anything.
 
 Only one client acts on any event: the active GM if one is connected, otherwise the first active owner of the actor.
 
