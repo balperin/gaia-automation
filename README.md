@@ -26,7 +26,7 @@ Only one client acts on any event: the active GM if one is connected, otherwise 
 
 ## Install
 Foundry setup > Add-on Modules > Install Module > paste the manifest URL:
-`https://github.com/balperin/gaia-automation/releases/latest/download/module.json`
+`https://raw.githubusercontent.com/balperin/gaia-automation/main/module.json`
 Then enable it in the world. On The Forge: Bazaar > Install from manifest URL, or upload the zip through the Import Wizard.
 
 ## Limits
