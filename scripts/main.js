@@ -100,6 +100,12 @@ function ownerActs(actor) {
   return owner ? owner.isSelf : !!game.users.activeGM?.isSelf;
 }
 
+/** True only on the client of the user who created this chat message. */
+function clickedByMe(msg) {
+  const author = msg.author ?? msg.user;
+  return author ? !!author.isSelf : false;
+}
+
 /* ---------------- roll-option toggles ---------------- */
 const findToggle = (actor, option) =>
   Object.values(actor.synthetics?.toggles ?? {}).flatMap((d) => Object.values(d)).find((t) => t.option === option) ?? null;
@@ -165,10 +171,10 @@ async function onMessage(msg) {
     return;
   }
 
-  // Song of the West, step 1: the action card itself, posted by the singer
+  // Song of the West, step 1: the action card itself. Whoever posted the card (player or GM) makes the roll.
   if (!pf.context && !pf.appliedDamage && cfg("songEnabled")) {
     const it = msg.item;
-    if (it?.type === "action" && it.name === SONG_ACTION && it.actor?.name === cfg("songActor") && ownerActs(it.actor)) {
+    if (it?.type === "action" && it.name === SONG_ACTION && it.actor?.name === cfg("songActor") && clickedByMe(msg)) {
       await songOfTheWest({ fromCard: true });
       return;
     }
