@@ -11,6 +11,7 @@ const DEFAULTS = {
   thirstFlavor: true,
   feelingEnabled: true,
   feelingActor: "Gideon, Arcanum Tempest",
+  feelingAnnounce: true,
   songEnabled: true,
   songActor: "Gentlehorn Dawnbringer",
   songArea: true,
@@ -48,6 +49,7 @@ Hooks.once("init", () => {
   reg("thirstFlavor", { name: "Vampiric Thirst: flavor lines and speech bubble", type: Boolean });
   reg("feelingEnabled", { name: "I've Got a Good Feeling About This: automate the toggle", hint: "On when the actor below casts a spell; off at the end of their turn.", type: Boolean });
   reg("feelingActor", { name: "Good Feeling: actor name", type: String });
+  reg("feelingAnnounce", { name: "Good Feeling: post a chat line when it switches on or off", type: Boolean });
   reg("songEnabled", { name: "Song of the West: run when the action card is posted", hint: "Rolls the check on the owner's client, applies the aura effect and posts a tier card.", type: Boolean });
   reg("songActor", { name: "Song of the West: actor name", type: String });
   reg("songArea", { name: "Song of the West: apply the one-time effects to tokens in the glow", hint: "GM client only: heal allies, lower dying and wounded, dazzle enemies, speed, condition relief, quickened.", type: Boolean });
@@ -74,6 +76,11 @@ export async function setup() {
   globalThis.gaiaAutomation = api;
   Hooks.on("createChatMessage", (msg) => { onMessage(msg).catch((err) => console.error(MOD, err)); });
   Hooks.on("combatTurnChange", (combat, prior) => { onTurnChange(combat, prior).catch((err) => console.error(MOD, err)); });
+  if (game.user.isGM) {
+    const names = [cfg("thirstActor"), cfg("feelingActor"), cfg("songActor"), ...pairs().flat()];
+    const missing = [...new Set(names)].filter((n) => n && !game.actors.getName(n));
+    if (missing.length) ui.notifications.warn("Gaia Automation: no actor in this world is named " + missing.join(" / ") + ". Check the names in the module settings.");
+  }
   console.log(MOD, "ready");
 }
 Hooks.once("ready", setup);
@@ -101,6 +108,24 @@ async function setToggle(actor, option, value) {
   if (!t || !!t.checked === value) return false;
   await actor.toggleRollOption(t.domain, option, t.itemId ?? null, value);
   return true;
+}
+
+/* ---------------- Good Feeling ---------------- */
+async function setFeeling(actor, value, why) {
+  const t = findToggle(actor, FEELING_OPTION);
+  if (!t) {
+    if (!state.warnedFeeling) {
+      state.warnedFeeling = true;
+      ui.notifications.warn("Gaia Automation: " + actor.name + " has no '" + FEELING_OPTION + "' roll-option toggle, so Good Feeling cannot be automated in this world.");
+    }
+    return;
+  }
+  if (!(await setToggle(actor, FEELING_OPTION, value))) return;
+  if (!cfg("feelingAnnounce")) return;
+  await ChatMessage.create({
+    speaker: ChatMessage.getSpeaker({ actor }),
+    content: "<strong>I've Got a Good Feeling About This</strong> " + (value ? "switches on" : "switches off") + ": " + why,
+  });
 }
 
 /* ---------------- Vengeful Spear ---------------- */
@@ -149,14 +174,22 @@ async function onMessage(msg) {
     }
   }
 
-  // Good Feeling: a spell cast card from the configured actor
-  if (cfg("feelingEnabled") && pf.origin?.type === "spell" && !pf.context && !pf.appliedDamage) {
+  // Good Feeling: the configured actor casts a spell. The cast card is the normal signal (origin "spell", or casting data,
+  // and no roll context). A spell attack or damage roll also counts when it is that actor's own turn or there is no combat,
+  // so casting straight from a HUD or a Spellstrike without a card still registers.
+  if (cfg("feelingEnabled") && !pf.appliedDamage && (pf.origin?.type === "spell" || pf.casting)) {
     const caster = msg.actor ?? game.actors.get(msg.speaker?.actor);
     if (caster?.name === cfg("feelingActor") && gmActs(caster)) {
-      await setToggle(caster, FEELING_OPTION, true);
-      if (!game.combat?.started) {
-        clearTimeout(state.feelingTimer);
-        state.feelingTimer = setTimeout(() => setToggle(caster, FEELING_OPTION, false), 12000); // no turns outside combat
+      const c = game.combat;
+      const inCombat = !!c?.started && c.combatants.some((x) => x.actorId === caster.id);
+      const ownTurn = inCombat && c.combatant?.actorId === caster.id;
+      const isCard = !pf.context;
+      if (isCard || ownTurn || !inCombat) {
+        await setFeeling(caster, true, (msg.item?.name ?? "a spell") + " was cast.");
+        if (!inCombat) {
+          clearTimeout(state.feelingTimer);
+          state.feelingTimer = setTimeout(() => setFeeling(caster, false, "the moment passed (no combat turn to end)."), 30000);
+        }
       }
     }
   }
@@ -201,7 +234,7 @@ async function onMessage(msg) {
 async function onTurnChange(combat, prior) {
   if (!cfg("feelingEnabled")) return;
   const ended = combat?.combatants?.get(prior?.combatantId)?.actor;
-  if (ended?.name === cfg("feelingActor") && gmActs(ended)) await setToggle(ended, FEELING_OPTION, false);
+  if (ended?.name === cfg("feelingActor") && gmActs(ended)) await setFeeling(ended, false, "end of turn.");
 }
 
 /* ---------------- Vampiric Thirst ---------------- */

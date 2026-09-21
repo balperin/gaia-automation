@@ -13,7 +13,9 @@ A small Foundry VTT module (core v13 or v14, PF2e system 7.x or 8.x) for the Gai
   `game.modules.get("gaia-automation").api.holdThirst()` keeps the reaction for one round.
 
 - **I've Got a Good Feeling About This** (Vanessa's Kiss): turns the `good-feeling` roll option on when the configured actor posts a
-  spell cast card and off when their turn ends (12 seconds later outside combat).
+  spell cast card (or rolls a spell attack or damage on their own turn) and off when their turn ends, or 30 seconds later when
+  they are not in a combat. A chat line reports each switch (setting). If the actor has no `good-feeling` toggle, or a configured
+  actor name does not exist in the world, the GM gets a warning.
 - **Song of the West**: when the configured actor posts the Song of the West action card, the owner's client rolls Acrobatics to
   Perform (or Performance if higher), applies the matching `Song of the West (Aura N)` effect and posts a tier card. The GM's client
   then applies the one-time effects to every actor with a visible token inside the glow (radius 5 x stacks + 5 ft, the same formula

@@ -2,7 +2,7 @@
   "id": "gaia-automation",
   "title": "Gaia Automation",
   "description": "Small automations for the Gaia campaign (PF2e): Vengeful Spear toggling for kindred pairs, Dorin's Vampiric Thirst reaction, Gideon's Good Feeling toggle and Gentlehorn's Song of the West. Each feature has a world setting to switch it off.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "authors": [
     {
       "name": "Bryen Alperin"
